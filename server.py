@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 log_lock = threading.Lock()
+mail_lock = threading.Lock()
 
 def logger(logging_enable, logging_path, message):
 	if logging_enable:
@@ -19,29 +20,31 @@ def logger(logging_enable, logging_path, message):
 		log_lock.release()
 
 def send_alert(name, threshold, mail):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect(("mail.ut.ac.ir", 25))
-    sock.recv(256)
-    sock.send("HELO mrazimi99@ut.ac.ir\r\n".encode("ascii"))
-    sock.recv(256)
-    sock.send("MAIL from: <mrazimi99@ut.ac.ir>\r\n".encode("ascii"))
-    sock.recv(256)
-    sock.send("AUTH LOGIN\r\n".encode("ascii"))
-    sock.recv(256)
-    sock.send("bXJhemltaTk5\r\n".encode("ascii"))
-    sock.recv(256)
-    sock.send("MTAxNk1BMTAxNm1h\r\n".encode("ascii"))
-    sock.recv(256)
-    sock.send(("RCPT to: <" + mail + ">\r\n").encode("ascii"))
-    sock.recv(256)
-    sock.send("DATA\r\n".encode("ascii"))
-    sock.recv(256)
-    sock.send("Subject: FTP Service Alert\r\n".encode("ascii"))
-    sock.send(("Hi dear " + name +".\r\nYour remained size is less than " + str(threshold) + ".\r\n.\r\n").encode("ascii"))
-    sock.recv(256)
-    sock.send("QUIT\r\n".encode("ascii"))
-    sock.recv(256)
-    sock.close()
+	mail_lock.acquire()
+	sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	sock.connect(("mail.ut.ac.ir", 25))
+	sock.recv(256)
+	sock.send("HELO mrazimi99@ut.ac.ir\r\n".encode("ascii"))
+	sock.recv(256)
+	sock.send("MAIL from: <mrazimi99@ut.ac.ir>\r\n".encode("ascii"))
+	sock.recv(256)
+	sock.send("AUTH LOGIN\r\n".encode("ascii"))
+	sock.recv(256)
+	sock.send("bXJhemltaTk5\r\n".encode("ascii"))
+	sock.recv(256)
+	sock.send("MTAxNk1BMTAxNm1h\r\n".encode("ascii"))
+	sock.recv(256)
+	sock.send(("RCPT to: <" + mail + ">\r\n").encode("ascii"))
+	sock.recv(256)
+	sock.send("DATA\r\n".encode("ascii"))
+	sock.recv(256)
+	sock.send("Subject: FTP Service Alert\r\n".encode("ascii"))
+	sock.send(("Hi dear " + name +".\r\nYour remained size is less than " + str(threshold) + ".\r\n.\r\n").encode("ascii"))
+	sock.recv(256)
+	sock.send("QUIT\r\n".encode("ascii"))
+	sock.recv(256)
+	sock.close()
+	mail_lock.release()
 
 def serve(command_client, data_client, config):
 	users = config["users"]
@@ -72,33 +75,43 @@ def serve(command_client, data_client, config):
 
 		if command[: 5] == "USER ":
 			if state == 0:
-				username = command[5 :]
+				arguments = command[5 :].split()
 
-				for pair in users:
-					if pair["user"] == username:
-						state = 1
-						message = "331 User name okey, need password."
-						break
+				if len(arguments) != 1:
+					message = "501 Syntax error in parameters or arguments."
+				else:
+					username = arguments[0]
 
-				if state != 1:
-					message = "430 Invalid username or password."
+					for pair in users:
+						if pair["user"] == username:
+							state = 1
+							message = "331 User name okey, need password."
+							break
+
+					if state != 1:
+						message = "430 Invalid username or password."
 			else:
 				message = "503 Bad sequence of commands."
 
 		elif command[: 5] == "PASS ":
 			if state == 1:
-				password = command[5 :]
+				arguments = command[5 :].split()
 
-				for pair in users:
-					if pair["user"] == username:
-						if pair["password"] == password:
-							state = 2
-							logger(logging_enable, logging_path, "User " + username + " logged in.")
-							message = "230 User logged in, proceed."
-						else:
-							state = 0
-							message = "430 Invalid username or password."
-						break
+				if len(arguments) != 1:
+					message = "501 Syntax error in parameters or arguments."
+				else:
+					password = arguments[0]
+
+					for pair in users:
+						if pair["user"] == username:
+							if pair["password"] == password:
+								state = 2
+								logger(logging_enable, logging_path, "User " + username + " logged in.")
+								message = "230 User logged in, proceed."
+							else:
+								state = 0
+								message = "430 Invalid username or password."
+							break
 			else:
 				message = "503 Bad sequence of commands."
 
@@ -107,34 +120,41 @@ def serve(command_client, data_client, config):
 				message = "257 " + wd.__str__()
 
 			elif command[: 4] == "MKD ":
-				flag = command[4 : 7]
+				arguments = command[4 :].split()
 
-				if flag == "-i ":
-					wd.joinpath(command[7 :]).touch()
-					logger(logging_enable, logging_path, "User " + username + " created a file named " + command[7 :])
-					message = "257 " + command[7 :] + " created."
+				if len(arguments) == 1:
+					wd.joinpath(arguments[0]).mkdir()
+					logger(logging_enable, logging_path, "User " + username + " created a directory named " + arguments[0])
+					message = "257 " + arguments[0] + " created."
+				elif len(arguments) == 2 and arguments[0] == "-i":
+					wd.joinpath(arguments[1]).touch()
+					logger(logging_enable, logging_path, "User " + username + " created a file named " + arguments[1])
+					message = "257 " + arguments[1] + " created."
 				else:
-					wd.joinpath(command[4 :]).mkdir()
-					logger(logging_enable, logging_path, "User " + username + " created a directory named " + command[4 :])
-					message = "257 " + command[4 :] + " created."
+					message = "501 Syntax error in parameters or arguments."
 
 			elif command[: 4] == "RMD ":
-				flag = command[4 : 7]
+				arguments = command[4 :].split()
 
-				if flag == "-f ":
-					if wd.joinpath(command[7 :]).is_dir():
-						shutil.rmtree(wd.joinpath(command[7 :]))
-						logger(logging_enable, logging_path, "User " + username + " removed a directory named " + command[7 :])
-						message = "250 " + command[7 :] + " deleted."
+				if len(arguments) == 1:
+					if wd.joinpath(arguments[0]).is_file():
+						if not (authorization_enable and username not in authorization_admins and wd.joinpath(arguments[0]) in [home.joinpath(f) for f in authorization_files]):
+							os.remove(wd.joinpath(arguments[0]))
+							logger(logging_enable, logging_path, "User " + username + " removed a file named " + arguments[0])
+							message = "250 " + arguments[0] + " deleted."
+						else:
+							message = "550 File unavailable."
+					else:
+						message = "500 Error."
+				elif len(arguments) == 2 and arguments[0] == "-f":
+					if wd.joinpath(arguments[1]).is_dir():
+						shutil.rmtree(wd.joinpath(arguments[1]))
+						logger(logging_enable, logging_path, "User " + username + " removed a directory named " + arguments[1])
+						message = "250 " + arguments[1] + " deleted."
 					else:
 						message = "500 Error."
 				else:
-					if wd.joinpath(command[4 :]).is_file():
-						os.remove(wd.joinpath(command[4 :]))
-						logger(logging_enable, logging_path, "User " + username + " removed a file named " + command[4 :])
-						message = "250 " + command[4 :] + " deleted."
-					else:
-						message = "500 Error."
+					message = "501 Syntax error in parameters or arguments."
 
 			elif command == "LIST":
 				data_message = ""
@@ -150,26 +170,35 @@ def serve(command_client, data_client, config):
 				size = str(len(data_message))
 				size = "0" * (16 - len(size)) + size
 				data_message = size + data_message
+				data_message = data_message.encode("ascii")
 
 				message = "226 List transfer done."
 
 			elif command[: 3] == "CWD":
-				if len(command) < 4:
+				arguments = command[4 :].split()
+
+				if len(arguments) == 0:
 					wd = home
-				elif command[4 :] == "..":
+				elif len(arguments) == 1 and arguments[0] == "..":
 					wd = wd.parent
-				else:
+				elif len(arguments) == 1:
 					wd = Path(wd.joinpath(command[4 :]))
+				else:
+					message = "501 Syntax error in parameters or arguments."
 
 				message = "250 Successful Change."
 
 			elif command[: 3] == "DL ":
-				if wd.joinpath(command[3 :]).is_file():
-					if not (authorization_enable and username not in authorization_admins and wd.joinpath(command[3 :]) in [home.joinpath(f) for f in authorization_files]):
-						data_message = wd.joinpath(command[3 :]).read_text()
+				arguments = command[3 :].split()
+
+				if len(arguments) != 1:
+					message = "501 Syntax error in parameters or arguments."
+				elif wd.joinpath(arguments[0]).is_file():
+					if not (authorization_enable and username not in authorization_admins and wd.joinpath(arguments[0]) in [home.joinpath(f) for f in authorization_files]):
+						data_message = wd.joinpath(arguments[0]).read_bytes()
 						size = str(len(data_message))
 						size = "0" * (16 - len(size)) + size
-						data_message = size + data_message
+						data_message = size.encode("ascii") + data_message
 						account = dict()
 
 						for user in accounting_users:
@@ -180,7 +209,7 @@ def serve(command_client, data_client, config):
 							data_message = ""
 							message = "425 Can't open data connection."
 						else:
-							logger(logging_enable, logging_path, "User " + username + " downloaded a file named " + command[3 :])
+							logger(logging_enable, logging_path, "User " + username + " downloaded a file named " + arguments[0])
 							account["size"] = str(int(account["size"]) - len(data_message))
 							message = "226 Successful Download."
 
@@ -197,7 +226,7 @@ def serve(command_client, data_client, config):
 				message += "PASS [password], Its argument is used to specify the user's password. It is used for user authentication.\n"
 				message += "PWD, It is used for printing current working directory\n"
 				message += "MKD [flag] [name], Its argument is used to specify the file/directory path. Flag: -i, If present, a new file will be created and otherwise a new directory. It is usede for creating a new file or directory.\n"
-				message += "RMD [flag] [name], Its argument is used to specify the file/directory path. Flag: -i, If present, a file will be removed and otherwise a directory. It is usede for removing a file or directory.\n"
+				message += "RMD [flag] [name], Its argument is used to specify the file/directory path. Flag: -f, If present, a directory will be removed and otherwise a file. It is usede for removing a file or directory.\n"
 				message += "LIST, It is used for printing list of file/directories exists in current working directory\n"
 				message += "CWD [path], Its argument is used to specify the directory's path. It is used for changing the current working directory.\n"
 				message += "DL [name], Its argument is used to specify the file's name. It is used for downloading a file.\n"
@@ -215,7 +244,7 @@ def serve(command_client, data_client, config):
 		command_client.send(message.encode("ascii"))
 
 		if len(data_message) > 0:
-			data_client.send(data_message.encode("ascii"))
+			data_client.send(data_message)
 
 	command_client.send(message.encode("ascii"))
 	logger(logging_enable, logging_path, "User " + username + " logged out.")
