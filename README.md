@@ -1,2 +1,1 @@
-MohammadReza Azimi 810196510
-Sepideh Fahiman 220795063
+A File Transfer Protocol server with command line interface.
